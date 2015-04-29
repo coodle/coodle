@@ -1,0 +1,327 @@
+--- http://okmij.org/ftp/Algorithms.html#zip-folds
+
+--- Combinators
+id a          = a
+const a b     = a
+flip f x y    = f y x
+comp f g x    = f (g x)
+app2 f a b    = f a b
+on            = comp comp comp
+comp2 f g h x = f (g x) (h x)
+apply x f     = f x
+fagb f g a b  = f a (g b)
+
+--- Booleans
+true a b  = a
+false a b = b
+and p q   = p q p
+or p q    = p p q
+not p a b = p b a
+
+--- Church Numbers
+church.zero f x         = x
+church.succ n f x       = f (n f x)
+church.pred n f x       = n (g h -> (h (g f))) (const x) id
+church.sub m n          = n church.pred m
+church.add a b          = b church.succ a
+church.mul m n f        = m (n f)
+church.pow m n          = n m
+church.is_zero n        = n (const false) true
+church.greater_than a b = not (church.is_zero (church.sub b a))
+church.less_than a b    = church.is_zero (church.sub (church.succ b) a)
+church.equal a b        = and (church.is_zero (church.sub a b)) (church.is_zero (church.sub b a))
+
+--- Arguments
+first_of n x = n (r a -> r) x x
+last_of n    = n true id id
+
+--- Tuples
+gen f t              = t f
+n_stream_free        = flip on
+n_stream             = flip comp
+n_tuple_seed         = n_stream_free flip
+n_tuple n            = n n_tuple_seed id id
+n_tuple_map n g t    = t (n (n_stream_free (f v a -> (f a (g v)))) id id)
+n_tuple_fold n t     = (cons nil -> (t (n (n_stream_free (f v a -> (f (cons v a)))) (e -> (e nil)) id)))
+n_tuple_rotr n t     = t (n n_tuple_seed (a b c -> (a (c b))) true id)
+n_tuple_rotl n t     = t (lst -> (n n_tuple_seed (e x -> (e x lst)) (a b -> a) lst))
+n_tuple_get n i t    = t (first_of (church.succ i) (first_of (church.succ (church.sub n i)))) id
+n_tuple_mod i f t nt = t (i (a b c -> (a (b c))) (e x -> (e (f x))) nt)
+n_tuple_set i v      = n_tuple_mod i (const v)
+n_tuple_repeat n x f = n (t -> (t x)) f
+n_tuple_rev_enum n   = ((f x t -> (n (t c -> (t (a -> (c (f a) a)))) (e -> (e x)) (const t))) church.succ c0)
+n_tuple_head n       = (t -> (t (first_of n)))
+
+--- Lens
+lens getter setter = (modify thing wrap -> (wrap (modify (getter thing) wrap) (flip setter thing)))
+get lens thing     = lens (x y -> x) thing (a b -> a)
+mod lens f thing   = lens (x y -> (f x)) thing (a b -> (b a))
+set lens val       = mod lens (const val)
+
+--- Cardinal Lens
+nth_of n m = lens (n_tuple_get m n) (n_tuple_set n)
+first_of   = nth_of c0
+second_of  = nth_of c1
+third_of   = nth_of c2
+
+--- Unit
+unit = n_tuple c0
+
+--- Singles
+single       = n_tuple c1
+single.first = first_of c1
+single.map   = n_tuple_map c1
+
+--- Pairs
+pair        = n_tuple c2
+pair.first  = first_of c2
+pair.second = second_of c2
+pair.map    = n_tuple_map c2
+
+--- Triples
+triple        = n_tuple c3
+triple.first  = first_of c3
+triple.second = second_of c3
+triple.third  = third_of c3
+triple.map    = n_tuple_map c3
+
+--- Arguments #2
+select_mod m n = (n (m n_tuple_seed id (a b -> (b a))) (last_of m))
+
+--- Church Fractions
+church.frac n m f      = n (m n_tuple_seed id (a b -> (b (f a)))))
+church.floor m r f x   = n_tuple_repeat m x (r f (last_of m))
+church.div n m         = church.floor m (church.frac n m)
+church.mod n m         = n_tuple_rev_enum m (select_mod m n)
+church.frac_ n m f     = n (x y -> (m (a b c -> (a (b c))) (e -> (e (f y))) (a -> x) id))
+church.floor_ m r f x  = n_tuple_repeat m x (r f (first_of m))
+church.div_ n m        = church.floor_ m (church.frac_ n m)
+church.mod_ n m        = church.sub n (church.mul m (church.div n m))
+church.multiple_of n m = church.is_zero (church.mod m n)
+church.even            = church.multiple_of c2
+church.odd             = comp not church.even
+
+--- Floats
+--- Those are the only primitives not yet implemented on the pure calculus.
+--- They can and should be - but native floats are still needed for perf.
++  = flip float.add
+*  = flip float.mul
+/  = flip float.div
+%  = flip float.mod
+-  = flip float.sub
+^  = float.pow
+_  = float.log
+>  = flip float.greater_than
+<  = flip float.less_than
+== = float.equal
+!= = on not ==
+++ = + 1
+-- = - 1
+** = * 2
+// = / 2
+^^ = ^ 2
+__ = _ 2
+>> = comp float.floor //
+<< = comp float.floor **
+#  = float.to_church
+>= a b = or (> a b) (== a b)
+<= a b = or (< a b) (== a b)
+multiple_of n = comp (== 0) (% n)
+even          = multiple_of 2
+odd           = comp not (multiple_of 2)
+floor         = float.floor
+ceil          = float.ceil
+sqrt          = flip ^ 0.5
+from_church n = n ++ 0
+prev_pow b n  = ^ b (floor (_ b n))
+next_pow b n  = ^ b (ceil (_ b n))
+sqr x         = * x x 
+compare lt eq gt a b = < a b lt (== a b eq (> a b gt))
+
+--- Enumaration
+--- nat_fold.next next init = gen (i ls -> (pair (pred i) (next (pred i) ls)))
+--- nat_fold next init n    = get pair.second (n (nat_fold.next next init) (pair n init))
+
+--- Church Lists
+--- iterated f [1 2 3 4] -> [1 (f 2) (f (f 3)) (f (f (f 4)))]
+nil cons nil         = nil
+cons x list cons nil = cons x (list cons nil)
+head list            = list (a b -> a) nil
+tail list cons nil   = list (h t g -> (g h (t cons))) (const nil) (h t -> t)
+fold cons nil list   = list cons nil
+length               = comp from_church (flip comp const)
+drop n               = n tail
+init list            = tail (fold (h t uh -> (cons uh (t h))) (const nil) list 0)
+take n               = n (r l -> (cons (head l) (r (tail l)))) (const nil)
+map f                = fold (h t -> (cons (f h) t)) nil
+filter cond          = fold (h t -> (cond h (cons h t) t)) nil
+reverse list         = fold (h t x -> (t (cons h x))) id list nil
+scan c n list        = fold (h t x -> (cons (c h x) (t (c h x)))) (const nil) list n
+last                 = comp head reverse
+concat               = flip (fold cons)
+flatten              = fold concat nil
+seq                  = fold comp id
+do                   = comp seq reverse
+bind x f             = flatten (map f x)
+return x             = cons x nil
+suffixes             = fold (h t -> (cons (cons h (head t)) t)) nil
+flat_zip.continuator = fold (x xs cont -> (cons x (cont xs))) (const [])
+flat_zip a b         = ((flat_zip.continuator a) (flat_zip.continuator b))
+zip_with.left        = fold (x xs cont -> (cont x xs)) (const [])
+zip_with.right f     = fold (y ys x cont -> (cons (f x y) (cont ys))) (const [])
+zip_with f a b       = ((zip_with.left a) (zip_with.right f b))
+$                    = zip_with
+zip                  = zip_with pair
+cartesian a b        = flatten (map (x -> (map (cons x) b)) a)
+combinations         = fold cartesian [[]]
+shift_left list      = tail (fold cons [(head list)] list)
+insert x list        = concat list [x]
+iterated f list      = fold (h t g -> (cons (g h) (t (comp f g)))) (const nil) list id
+iterate n next       = n (rec state -> (cons state (rec (next state)))) (const nil)
+iterate_tuple n next = iterate n (t -> (t next))
+to_tuple_rev list t  = fold (h t -> (t h)) t list
+get_nth n list       = n_tuple_get c2 c0 (# n (n_tuple_get c2 c1) (list pair nil))
+
+--- Scott Lists 
+--- data Sl a = SCons a (Sl a) | SNil
+s_cons h t             = (cons nil -> (cons cons h t))
+s_nil                  = (cons nil -> nil)
+s_fold cons nil l      = l (rec head tail -> (cons head (tail rec nil))) nil
+s_map f                = s_fold (x xs -> (s_cons (f x) xs)) s_nil
+s_head l               = l (rec head tail -> head) s_nil
+s_tail l               = l (rec head tail -> tail) s_nil
+s_drop n               = n s_tail
+s_zip_with f a b       = a (ar ah at b -> (b (br bh bt -> (s_cons (f ah bh) (at ar (const s_nil) bt))) s_nil)) s_nil b
+s_zip_fold cons nil ls = s_fold (s_zip_with cons) (s_map (const nil) (s_head ls)) ls
+s_shift_left list      = s_tail (s_fold s_cons (s_cons (s_head list) s_nil) list)
+s_take n list          = (# n (r l -> (s_cons (s_head l) (r (s_tail l)))) (const s_nil) list)
+
+-- Church <-> Scott Lists
+-- Also defines faster versions of functions such as "take" and "drop" for lists.
+list_to_scott            = fold s_cons s_nil
+scott_to_list            = s_fold cons nil
+drop n list              = scott_to_list (s_drop n (list_to_scott list))
+zip_fold cons nil lists  = scott_to_list (s_zip_fold cons nil (list_to_scott (map list_to_scott lists)))
+tail                     = drop c1
+transpose                = zip_fold cons nil
+take n list              = scott_to_list (s_take n (list_to_scott list))
+chunks_of.fold n h t i c = == (% n (++ i)) 0 (cons (cons h c) (t (++ i) nil)) (t (++ i) (cons h c))
+chunks_of n list         = map reverse (fold (chunks_of.fold n) nil list 0 nil)
+
+--- Streams
+--- data Stream a s = Stream { seed :: s, step :: s -> (a,s) }
+stream                = pair
+stream.seed           = pair.first
+stream.step           = pair.second
+stream.tail s         = stream (get pair.second (get stream.step s (get stream.seed s))) (get stream.step s)
+stream.head s         = get pair.first (get stream.step s (get stream.seed s))
+stream.nth n s        = stream.head (n stream.tail s)
+stream.from_list list = stream (list_to_scott list) (list -> (pair (s_head list) (s_tail list)))
+stream.take n         = # n (r s -> (cons (stream.head s) (r (stream.tail s)))) (const nil)
+
+-- Bool Church Lists
+all_true             = fold and true
+any_true             = fold or false
+any predicate        = comp any_true (map predicate)
+all predicate        = comp all_true (map predicate)
+
+-- Float Church Lists
+enum_til n             = iterate (# n) ++ 0
+range a b              = map (+ a) (enum_til (- a b))
+sum                    = fold + 0
+prod                   = fold * 1
+average list           = / (length list) (sum list)
+bit_list_rev size num  = (cons nil -> (# size (r x -> (cons (% 2 x) (r (floor (/ 2 x))))) (const nil) num))
+bit_list size num      = (cons nil -> (# size (r p x -> (cons (< (// p) x 0 1) (r (// p) (% (// p) x)))) (a b -> nil) (^ 2 size) num))
+sum_evens_below n      = sum (filter even (enum_til n))
+
+--- Scott Binary Untagged Trees
+--- data St a = SttNode (St a) (St a) | SttLeaf a | SttNil
+--- Todo: generalize derivation of arbitrary Scott-Encoded ADTs
+st.node a b               = (node leaf nil -> (node node a b))
+st.leaf a                 = (node leaf nil -> (leaf a))
+st.nil                    = (node leaf nil -> nil)
+st.fold node leaf nil t   = t (rec a b -> (node (a rec leaf nil) (b rec leaf nil))) leaf nil
+st.map f                  = st.fold st.node (comp st.leaf f) st.nil
+st.is_nil tree            = tree (r a b -> false) (a -> false) true
+st.get_inside tree        = tree (const st.node) id st.nil
+st.set_inside val tree    = tree (const st.node) (const (st.leaf val)) (st.leaf val)
+st.get_left tree          = tree (rec a b -> a) st.leaf st.nil
+st.get_right tree         = tree (rec a b -> b) st.leaf st.nil
+st.set_left val tree      = tree (rec a b -> (st.node val b)) (a -> (st.node val a)) (st.node val st.nil)
+st.set_right val tree     = tree (rec a b -> (st.node a val)) (a -> (st.node a val)) (st.node st.nil val)
+st.get_path_rev path tree = fold (h t -> (== h 0 st.get_left st.get_right t)) tree path
+st.get_path path tree     = fold (h t x -> (== h 0 (t (st.get_left x)) (t (st.get_right x)))) id path tree
+st.set_path.left t x      = st.node (t (st.get_left x)) (st.get_right x)
+st.set_path.right t x     = st.node (st.get_left x) (t (st.get_right x))
+st.set_path path val tree = fold (h t x -> (== h 0 st.set_path.left st.set_path.right t x)) (const val) path tree
+st.left                   = lens st.get_left st.set_left
+st.right                  = lens st.get_right st.set_right
+st.inside                 = lens st.get_inside st.set_inside
+st.path path              = lens (st.get_path path) (st.set_path path)
+st.merge.nil b            = b
+st.merge.leaf a b         = st.leaf a
+st.merge.node al ar b     = st.node (al (st.get_left b)) (ar (st.get_right b))
+st.merge                  = st.fold st.merge.node st.merge.leaf st.merge.nil
+st.bin_tree leaf depth    = # depth (r x -> (st.node (r (** x)) (r (++ (** x))))) leaf 0
+st.nil_bin_tree depth     = # depth (r -> (st.node r r)) st.nil
+st.to_list                = st.fold concat (a -> [a]) nil
+st.tuplify                = st.fold pair single unit
+st.pretty                 = st.fold (a b -> [a b]) id nil
+
+--- Binary Space Partitioning using st
+--- Todo: this is awful and can be expressed much more elegantly!
+st.drive_pair.walk a b an bn r   = == an bn (== an 0 id flip st.node r st.nil) (== an 0 id flip st.node (st.leaf a) (st.leaf b))
+st.drive_pair.fold a b abn r     = st.drive_pair.walk a b (get pair.first abn) (get pair.second abn) r
+st.drive_pair path_a path_b a b  = fold (st.drive_pair.fold a b) st.nil (zip path_a path_b)
+-- Inserts a key/val pair into a tree, where a key is a list of zeros/ones.
+st.insert.nil d p k v            = st.leaf (pair k v)
+st.insert.pair pa ka va pb kb vb = st.drive_pair pa pb (pair ka va) (pair kb vb)
+st.insert.leaf kv2 d p k v       = st.insert.pair (drop (# d) (get pair.first kv2)) (get pair.first kv2) (get pair.second kv2) p k v
+st.insert.leaf kv2 d p k v       = st.insert.pair (drop (# d) (get pair.first kv2)) (get pair.first kv2) (get pair.second kv2) (scott_to_list p) k v
+st.insert.left r a b d p k v     = st.node (a r st.insert.leaf st.insert.nil (++ d) (s_tail p) k v) b
+st.insert.right r a b d p k v    = st.node a (b r st.insert.leaf st.insert.nil (++ d) (s_tail p) k v)
+st.insert.node r a b d p k v     = == 0 (s_head p) st.insert.left st.insert.right r a b d p k v
+st.insert key val tree           = tree st.insert.node st.insert.leaf st.insert.nil 0 (list_to_scott key) key val
+st.remove.node r a b             = st.is_nil a b (st.is_nil b a (st.node a b))
+st.remove.cons head tail tree    = mod (== head 0 st.left st.right) tail tree st.remove.node st.leaf st.nil
+st.remove                        = fold st.remove.cons (const st.nil)
+
+--- List
+--- sort.insert s n    = st.insert (to_base_padded s 2 n) n
+--- sort int_size list = st.to_list (st.map (get pair.second) (seq (map (sort.insert int_size) list) st.nil))
+
+--- Linear algebra: vectors
+--- Todo: how can I generalize the cross to N dimensions?
+cross a b    = to_tuple_rev (concat a b) (c b a z y x -> [(- (* z b) (* y c)) (- (* z a) (* x c)) (- (* y a) (* x b))])
+dot a b      = sum ($ * a b)
+quadrance a  = dot a a
+distance a b = sqrt (quadrance ($ - b a))
+magnitude    = comp sqrt quadrance
+norm v       = map (/ (magnitude v)) v
+
+--- Vector implementation using st
+--- vec.push is unecessarily ugly because bad performance using lens... can it improve?
+vec.nil               = triple 0 1 st.nil
+vec.len               = triple.first
+vec.cap               = triple.second
+vec.data              = triple.third
+vec.generate f size   = triple size (next_pow 2 size) (st.bin_tree (comp st.leaf f) (_ 2 (next_pow 2 size)))
+vec.set idx val vec   = vec (len cap data -> (triple len cap (st.set_path (bit_list (_ 2 cap) idx) (st.leaf val) data)))
+vec.get idx vec       = vec (len cap data -> (st.get_inside (st.get_path (bit_list (_ 2 cap) idx) data)))
+vec.nth idx           = lens (vec.get idx) (vec.set idx)
+vec.pretty vec        = mod vec.data st.to_list vec
+vec.is_full v         = float.equal (get vec.len v) (get vec.cap v)
+vec.push.data x l c d = st.set_path (bit_list (_ 2 (== l c ** id c)) l) (st.leaf x) (== l c (st.node d (st.nil_bin_tree (_ 2 c))) d)
+vec.push x v          = v (l c d -> (triple (++ l) (== l c ** id c) (vec.push.data x l c d)))
+vec.from_list l       = seq (map vec.push (reverse l)) vec.nil
+vec.to_list v         = st.to_list (get vec.data v)
+vec.enum_til          = vec.generate id
+vec.fold f g i v      = v (l c d -> (st.fold f g i d))
+vec.map f v           = v (l c d -> (triple l c (st.fold st.node (comp st.leaf f) st.nil d)))
+vec.sum               = vec.fold + id 0
+
+--- PeNgU1N oF d00m (random)
+--- http://stackoverflow.com/questions/3062746/special-simple-random-number-generator
+rnd seed        = (% (^ 2 32) (+ 12345 (* 1103515245 seed)))
+rnd.stream seed = stream seed (seed -> {(% 1 (/ (^ 2 32) seed)) (rnd seed)})
